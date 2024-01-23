@@ -1,6 +1,9 @@
+mod error;
+
 use ashpd::desktop::screenshot::Screenshot;
 use clap::{command, ArgAction, Parser};
 use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, path::PathBuf};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use zbus::{dbus_proxy, zvariant::Value, Connection};
 
 #[derive(Parser, Default, Debug, Clone, PartialEq, Eq)]
@@ -54,6 +57,11 @@ trait Notifications {
 //TODO: better error handling
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+
     let args = Args::parse();
     let picture_dir = (!args.interactive).then(|| {
         args.save_dir
