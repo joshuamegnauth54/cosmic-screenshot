@@ -5,7 +5,12 @@ use clap::{command, ArgAction, Parser};
 use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, path::PathBuf};
 use tracing::{error, info};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-use zbus::{dbus_proxy, zvariant::Value, Connection};
+use zbus::{
+    dbus_proxy,
+    export::futures_util::{future::FutureExt, TryFutureExt},
+    zvariant::Value,
+    Connection,
+};
 
 use error::Error;
 
@@ -57,7 +62,29 @@ trait Notifications {
     ) -> zbus::Result<u32>;
 }
 
-//TODO: better error handling
+// Send a notification for the screenshot app
+async fn send_notify(summary: &str, body: &str) -> Result<(), Error> {
+    let connection = Connection::session().await.map_err(Error::Notify)?;
+
+    let proxy = NotificationsProxy::new(&connection)
+        .await
+        .map_err(Error::Notify)?;
+    proxy
+        .notify(
+            "Cosmic Screenshot",
+            0,
+            "camera-photo-symbolic",
+            summary,
+            body,
+            &[],
+            HashMap::new(),
+            5000,
+        )
+        .await
+        .map_err(Error::Notify)
+        .map(|_| ())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::registry()
@@ -134,24 +161,7 @@ async fn main() -> Result<(), Error> {
     info!("Saving screenshot to {path}");
 
     if args.notify {
-        let connection = Connection::session().await.map_err(Error::Notify)?;
-
-        let proxy = NotificationsProxy::new(&connection)
-            .await
-            .map_err(Error::Notify)?;
-        _ = proxy
-            .notify(
-                "Cosmic Screenshot",
-                0,
-                "camera-photo-symbolic",
-                &path,
-                "",
-                &[],
-                HashMap::new(),
-                5000,
-            )
-            .await
-            .map_err(Error::Notify)?;
+        send_notify(&path, "").await?;
     }
 
     Ok(())
