@@ -1,6 +1,6 @@
 mod error;
 
-use ashpd::desktop::screenshot::Screenshot;
+use ashpd::desktop::screenshot::{Screenshot, ScreenshotRequest};
 use clap::{command, ArgAction, Parser};
 use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, path::PathBuf};
 use tracing::{error, info};
@@ -85,14 +85,7 @@ async fn send_notify(summary: &str, body: &str) -> Result<(), Error> {
         .map(|_| ())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Error> {
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();
-
-    let args = Args::parse();
+async fn request_screenshot(args: Args) -> Result<String, Error> {
     let picture_dir = (!args.interactive)
         .then(|| {
             args.save_dir
@@ -111,7 +104,7 @@ async fn main() -> Result<(), Error> {
         .response()?;
 
     let uri = response.uri();
-    let path = match uri.scheme() {
+    match uri.scheme() {
         "file" => {
             if let Some(picture_dir) = picture_dir {
                 let date = chrono::Local::now();
@@ -147,21 +140,42 @@ async fn main() -> Result<(), Error> {
                     })?;
                 }
 
-                path.to_string_lossy().to_string()
+                Ok(path.to_string_lossy().to_string())
             } else {
-                uri.path().to_string()
+                Ok(uri.path().to_string())
             }
         }
         scheme => {
             error!("Unsupported URL scheme: {scheme}");
-            return Err(Error::Ashpd(ashpd::Error::Zbus(zbus::Error::Unsupported)));
+            Err(Error::Ashpd(ashpd::Error::Zbus(zbus::Error::Unsupported)))
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Error> {
+    // Init tracing but don't panic if it fails
+    let _ = tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .try_init();
+
+    let args = Args::parse();
+    let notify = args.notify;
+
+    let result = match request_screenshot(args).await {
+        Ok(path) => {
+            info!("Saving screenshot to {path}");
+            path
+        }
+        Err(e) => {
+            error!("Screenshot failed with {e}");
+            e.to_user_facing()
         }
     };
 
-    info!("Saving screenshot to {path}");
-
-    if args.notify {
-        send_notify(&path, "").await?;
+    if notify {
+        send_notify(&result, "").await?;
     }
 
     Ok(())
