@@ -1,16 +1,13 @@
+#![allow(clippy::too_many_arguments)]
+
 mod error;
 
-use ashpd::desktop::screenshot::{Screenshot, ScreenshotRequest};
+use ashpd::desktop::screenshot::Screenshot;
 use clap::{command, ArgAction, Parser};
 use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, path::PathBuf};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-use zbus::{
-    dbus_proxy,
-    export::futures_util::{future::FutureExt, TryFutureExt},
-    zvariant::Value,
-    Connection,
-};
+use zbus::{dbus_proxy, zvariant::Value, Connection};
 
 use error::Error;
 
@@ -85,6 +82,7 @@ async fn send_notify(summary: &str, body: &str) -> Result<(), Error> {
         .map(|_| ())
 }
 
+#[tracing::instrument]
 async fn request_screenshot(args: Args) -> Result<String, Error> {
     let picture_dir = (!args.interactive)
         .then(|| {
@@ -104,6 +102,7 @@ async fn request_screenshot(args: Args) -> Result<String, Error> {
         .response()?;
 
     let uri = response.uri();
+    debug!("Screenshot request URI: {uri}");
     match uri.scheme() {
         "file" => {
             if let Some(picture_dir) = picture_dir {
@@ -153,7 +152,7 @@ async fn request_screenshot(args: Args) -> Result<String, Error> {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Error> {
+async fn main() {
     // Init tracing but don't panic if it fails
     let _ = tracing_subscriber::registry()
         .with(fmt::layer())
@@ -163,20 +162,25 @@ async fn main() -> Result<(), Error> {
     let args = Args::parse();
     let notify = args.notify;
 
-    let result = match request_screenshot(args).await {
+    let (summary, body) = match request_screenshot(args).await {
         Ok(path) => {
-            info!("Saving screenshot to {path}");
-            path
+            info!("Screenshot saved to {path}");
+            ("Screenshot captured", path)
         }
         Err(e) => {
-            error!("Screenshot failed with {e}");
-            e.to_user_facing()
+            if !e.cancelled() {
+                error!("Screenshot failed with {e}");
+                ("Screenshot failed", e.to_user_facing())
+            } else {
+                info!("Screenshot cancelled");
+                ("Screenshot cancelled", "".into())
+            }
         }
     };
 
     if notify {
-        send_notify(&result, "").await?;
+        if let Err(e) = send_notify(summary, &body).await {
+            error!("Failed to post notification on completion: {e}");
+        }
     }
-
-    Ok(())
 }
